@@ -1,6 +1,6 @@
 require 'mkmf'
 
-SRC_ROOT = File.join(__dir__, "..", "libsignal-protocol-c", "src")
+SRC_ROOT = File.join(__dir__, "libsignal-protocol-c", "src")
 
 vpaths = %w[
   .
