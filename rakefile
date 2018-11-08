@@ -1,0 +1,17 @@
+require 'rake/testtask'
+require 'rake/extensiontask'
+
+Rake::ExtensionTask.new  do |ext|
+  ext.name = "ext_lib_signal"
+  ext.ext_dir = "ext/lib_signal/ext_lib_signal"
+  ext.lib_dir = "lib/lib_signal"
+end
+
+Rake::TestTask.new do |t|
+  t.name = :test
+  t.libs << "lib"
+  t.test_files = FileList["test/**/*.rb"]    
+end
+
+task :default => :test
+
