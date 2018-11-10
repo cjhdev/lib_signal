@@ -1,34 +1,38 @@
-require_relative 'ext_client'
-require_relative 'persistence'
-
 module LibSignal
 
   class Client
     
-    attr_reader :name
-
     def initialize(name, **opts)
       
-      @name = name
+      @data = opts[:data]||MemoryBacked.new(name)
+      @ext = ExtClient.new(@data)
       
-      @ext = ExtClient.new
+      if not @data.installed?
+        
+        @data.install(
+          :identity_key => @ext.generate_identity_key_pair,
+          :registration_id => @ext.generate_registration_id,
+          :pre_keys => @ext.generate_signed_pre_key,
+          :signed_pre_key => @ext.generate_signed_pre_key
+        )
+        
+      end
       
-      identity_key_pair = @ext.generate_identity_key_pair      
-      
-      registration_id = @ext.generate_registration_id
-      
-      signed_pre_key = @ext.generate_signed_pre_key
-      
+    end
+    
+    def name
+      @data.name
     end
     
     # @return [Integer]
     def registration_id
-      @ext.get_registration_id
+      @data.get_registration_id
     end
     
     # Add or update a remote client
     #
-    def add_remote
+    def add_session(name, id, pre_key)
+      
     end
     
     # List remotes

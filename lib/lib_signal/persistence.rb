@@ -1,6 +1,6 @@
 module LibSignal
 
-  module Persistence
+  class Persistence
   
     # load specific session
     def get_session(name, id)
@@ -37,6 +37,11 @@ module LibSignal
     end
     
     def get_registration_id
+      raise NotImplementedError
+    end
+    
+    # @return [Hash]
+    def get_self
       raise NotImplementedError
     end
     
@@ -87,7 +92,7 @@ module LibSignal
     def get_sender_key(name, id, group_id)
       raise NotImplementedError
     end
-
+    
   end
 
 end

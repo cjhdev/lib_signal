@@ -1,16 +1,30 @@
-require_relative 'persistence'
-
 module LibSignal
 
   class MemoryBacked < Persistence
     
-    def initialize      
+    attr_reader :name
+    
+    def initialize(name)
+      @name = name
       @identity_key = nil
       @registration_id = nil     
       @sessions = {}      
       @pre_keys = {}
       @signed_pre_keys = {} 
       @sender_keys = {}
+    end
+    
+    def install(params)
+      if not installed?
+        @identity_key = params[:identity_key]
+        @registration_id = params[:registration_id]
+        @pre_keys = params[:pre_keys]
+        @signed_pre_keys = params[:signed_pre_key]
+      end    
+    end
+    
+    def installed?
+      @identity_key and @registration_id
     end
     
     def get_session(name, id)
@@ -130,21 +144,22 @@ module LibSignal
       true
     end
 
-    def post_sender_key(name, id, group_id, record, user_record)
+    def post_sender_key(group_id, name, id, record, user_record)
       data = {
         :id => id,
+        :name => name,
         :group_id => group_id,
         :record => record,
         :user_record => user_record
       }
-      key = "#{name}#{id}#{group_id}"      
-      @sender_keys[key] = data      
+      @sender_keys["#{group_id}#{name}#{id}"] = data      
       true      
     end
     
     def get_sender_key(name, id, group_id)
-      @sender_keys["#{name}#{id}#{group_id}"]      
+      @sender_keys["#{group_id}#{name}#{id}"]      
     end
+    
   end
 
 end
