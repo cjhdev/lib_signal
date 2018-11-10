@@ -1,5 +1,8 @@
 #include "signal_protocol.h"
 #include "key_helper.h"
+#include "session_pre_key.h"
+#include "session_builder.h"
+#include "session_cipher.h"
 
 #include <ruby.h>
 #include <assert.h>
@@ -14,6 +17,8 @@ struct ext_client {
 static uint64_t my_get_time(void);
 static VALUE buffer_to_rstring(const signal_buffer *buffer);
 static signal_buffer *rstring_to_buffer(VALUE str);
+static ec_public_key *rstring_to_ec_public_key(signal_context *ctx, VALUE str);
+static ec_private_key *rstring_to_ec_private_key(signal_context *ctx, VALUE str);
 
 /* crypto provider ****************************************************/
 
@@ -173,76 +178,68 @@ static int aes_decrypt(signal_buffer **output,
 
 static int get_pre_key(signal_buffer **record, uint32_t pre_key_id, void *user_data)
 {
-    int retval = 0;
+    int retval = SG_ERR_INVALID_KEY_ID;
 
-    VALUE result = rb_funcall((VALUE)user_data, rb_intern("get_pre_key"), 0);
+    VALUE result = rb_funcall((VALUE)user_data, rb_intern("get_pre_key"), 1, UINT2NUM(pre_key_id));
+    
+    if(result != Qnil){
+        
+        *record = rstring_to_buffer(rb_hash_aref(result, ID2SYM(rb_intern("key"))));
+        retval = SG_SUCCESS;
+    }
     
     return retval;
 }
 
 static int post_pre_key(uint32_t pre_key_id, uint8_t *record, size_t record_len, void *user_data)
 {
-    int retval = 0;
-    
-    VALUE result = rb_funcall((VALUE)user_data, rb_intern("post_pre_key"), 0);
-    
-    return retval;
+    (void)rb_funcall((VALUE)user_data, rb_intern("post_pre_key"), 2, UINT2NUM(pre_key_id), rb_str_new((char *)record, record_len));    
+    return 0;
 }
 
 static int pre_key_exists(uint32_t pre_key_id, void *user_data)
 {
-    int retval = 0;
-    
-    VALUE result = rb_funcall((VALUE)user_data, rb_intern("pre_key_exists?"), 0);
-    
-    return retval;
+    return (rb_funcall((VALUE)user_data, rb_intern("pre_key_exists?"), 0) == Qtrue) ? 1 : 0;
 }
 
 static int delete_pre_key(uint32_t pre_key_id, void *user_data)
 {
-    int retval = 0;
-    
-    VALUE result = rb_funcall((VALUE)user_data, rb_intern("delete_pre_key"), 0);
-    
-    return retval;
+    (void)rb_funcall((VALUE)user_data, rb_intern("delete_pre_key"), 1, UINT2NUM(pre_key_id));    
+    return 0;
 }
 
 /* signed pre key store ***********************************************/
 
 static int get_signed_pre_key(signal_buffer **record, uint32_t pre_key_id, void *user_data)
 {
-    int retval = 0;
+    int retval = SG_ERR_INVALID_KEY_ID;
+
+    VALUE result = rb_funcall((VALUE)user_data, rb_intern("get_signed_pre_key"), 1, UINT2NUM(pre_key_id));
     
-    VALUE result = rb_funcall((VALUE)user_data, rb_intern("get_signed_pre_key"), 0);
+    if(result != Qnil){
+        
+        *record = rstring_to_buffer(rb_hash_aref(result, ID2SYM(rb_intern("key"))));
+        retval = SG_SUCCESS;
+    }
     
-    return retval;
+    return retval;    
 }
 
 static int post_signed_pre_key(uint32_t pre_key_id, uint8_t *record, size_t record_len, void *user_data)
 {
-    int retval = 0;
-    
-    VALUE result = rb_funcall((VALUE)user_data, rb_intern("post_signed_pre_key"), 0);
-    
-    return retval;
+    (void)rb_funcall((VALUE)user_data, rb_intern("post_signed_pre_key"), 2, UINT2NUM(pre_key_id), rb_str_new((char *)record, record_len));    
+    return 0;
 }
 
 static int signed_pre_key_exists(uint32_t pre_key_id, void *user_data)
 {
-    int retval = 0;
-    
-    rb_funcall((VALUE)user_data, rb_intern("signed_pre_key_exists?"), 1, UINT2NUM(pre_key_id));
-    
-    return retval;
+    return (rb_funcall((VALUE)user_data, rb_intern("signed_pre_key_exists?"), 0) == Qtrue) ? 1 : 0;
 }
 
 static int delete_signed_pre_key(uint32_t pre_key_id, void *user_data)
 {
-    int retval = 0;
-    
-    VALUE result = rb_funcall((VALUE)user_data, rb_intern("delete_signed_pre_key"), 0);
-    
-    return retval;
+    (void)rb_funcall((VALUE)user_data, rb_intern("delete_signed_pre_key"), 1, UINT2NUM(pre_key_id));    
+    return 0;
 }
 
 /* locking ************************************************************/
@@ -268,18 +265,36 @@ static void global_log(int level, const char *message, size_t len, void *user_da
 
 static int post_sender_key(const signal_protocol_sender_key_name *sender_key_name, uint8_t *record, size_t record_len, uint8_t *user_record, size_t user_record_len, void *user_data)
 {
-    int retval = -1;
-
-    rb_funcall((VALUE)user_data, rb_intern("post_sender_key"), 0);
+    (void)rb_funcall((VALUE)user_data, rb_intern("post_sender_key"), 
+        5,
+        rb_str_new((char *)sender_key_name->group_id, sender_key_name->group_id_len),
+        rb_str_new((char *)sender_key_name->sender.name, sender_key_name->sender.name_len),
+        INT2NUM(sender_key_name->sender.device_id),
+        rb_str_new((char *)record, record_len),
+        rb_str_new((char *)user_record, user_record_len)        
+    );
     
-    return retval;
+    return 0;
 }
 
 static int get_sender_key(signal_buffer **record, signal_buffer **user_record, const signal_protocol_sender_key_name *sender_key_name, void *user_data)
 {
-    int retval = -1;
+    int retval = 0;
     
-    rb_funcall((VALUE)user_data, rb_intern("get_sender_key"), 0);
+    VALUE result = rb_funcall((VALUE)user_data, rb_intern("get_sender_key"),
+        3,
+        rb_str_new((char *)sender_key_name->group_id, sender_key_name->group_id_len),
+        rb_str_new((char *)sender_key_name->sender.name, sender_key_name->sender.name_len),
+        INT2NUM(sender_key_name->sender.device_id)
+    );
+    
+    if(result != Qnil){
+        
+        *record = rstring_to_buffer(rb_hash_aref(result, ID2SYM(rb_intern("record"))));
+        *user_record = (rb_hash_aref(result, ID2SYM(rb_intern("user_record"))) != Qnil) ? rstring_to_buffer(rb_hash_aref(result, ID2SYM(rb_intern("user_record")))) : NULL;
+        
+        retval = 1;
+    }
     
     return retval;
 }
@@ -309,54 +324,57 @@ static int get_local_registration_id(void *user_data, uint32_t *registration_id)
     
     VALUE result = rb_funcall((VALUE)user_data, rb_intern("get_registration_id"), 0);
     
+    if(result != Qnil){
+        
+        *registration_id = NUM2UINT(result);
+        
+        retval = 0;
+    }
+    
     return retval;
 }
 
 static int post_identity(const signal_protocol_address *address, uint8_t *key_data, size_t key_len, void *user_data)
 {
-    VALUE result = rb_funcall((VALUE)user_data, rb_intern("post_identity"), 
+    (void)rb_funcall((VALUE)user_data, rb_intern("post_identity"), 
         3, 
         rb_str_new((char *)address->name, address->name_len), 
         INT2NUM(address->device_id),
         rb_str_new((char *)key_data, key_len)
     );
     
-    return (result == Qtrue) ? 0 : -1;
+    return 0;
 }
 
 static int identity_is_trusted(const signal_protocol_address *address, uint8_t *key_data, size_t key_len, void *user_data)
 {
-    int retval = -1;
+    VALUE result = rb_funcall((VALUE)user_data, rb_intern("identity_is_trusted?"), 
+        3,
+        rb_str_new((char *)address->name, address->name_len), 
+        INT2NUM(address->device_id),
+        rb_str_new((char *)key_data, key_len)        
+    );
     
-    VALUE result = rb_funcall((VALUE)user_data, rb_intern("identity_is_trusted?"), 0);
-    
-    return retval;
+    return (result == Qtrue) ? 1 : 0;
 }
 
 /* session store ******************************************************/
 
 static int get_session(signal_buffer **record, signal_buffer **user_record, const signal_protocol_address *address, void *user_data)
 {
-    int retval = -1;
+    int retval = 0;
     
     VALUE result = rb_funcall((VALUE)user_data, rb_intern("get_session"), 
         2, 
         rb_str_new((char *)address->name, address->name_len), 
         INT2NUM(address->device_id)
     );
-
-    if(!rb_obj_is_kind_of(rb_eException, result)){
+    
+    if(result != Qnil){
         
-        if(result == Qnil){
-            
-            retval = 0;
-        }
-        else{
-        
-            *record = rstring_to_buffer(rb_hash_aref(result, ID2SYM(rb_intern("record"))));
-            *user_record = (rb_hash_aref(result, ID2SYM(rb_intern("record"))) != Qnil) ? rstring_to_buffer(rb_hash_aref(result, ID2SYM(rb_intern("user_record")))) : NULL;
-            retval = 1;
-        }
+        *record = rstring_to_buffer(rb_hash_aref(result, ID2SYM(rb_intern("record"))));
+        *user_record = (rb_hash_aref(result, ID2SYM(rb_intern("user_record"))) != Qnil) ? rstring_to_buffer(rb_hash_aref(result, ID2SYM(rb_intern("user_record")))) : NULL;
+        retval = 1;
     }
     
     return retval;
@@ -364,22 +382,19 @@ static int get_session(signal_buffer **record, signal_buffer **user_record, cons
 
 static int get_session_ids(signal_int_list **sessions, const char *name, size_t name_len, void *user_data)
 {
-    int retval = -1;
+    int retval = 0;
     int i;
     
-    VALUE result = rb_funcall((VALUE)user_data, rb_intern("get_session_ids"), 0);
-
-    if(!rb_obj_is_kind_of(rb_eException, result)){
+    VALUE result = rb_funcall((VALUE)user_data, rb_intern("get_session_ids"), 1, rb_str_new((char *)name, name_len));
         
-        retval = NUM2INT(rb_funcall(result, rb_intern("size"), 0));
-        *sessions = signal_int_list_alloc();
+    retval = NUM2INT(rb_funcall(result, rb_intern("size"), 0));
+    *sessions = signal_int_list_alloc();
+    
+    for(i=0U; i < retval; i++){
         
-        for(i=0U; i < retval; i++){
-            
-            (void)signal_int_list_push_back(*sessions, rb_ary_entry(result, i));
-        }
+        (void)signal_int_list_push_back(*sessions, rb_ary_entry(result, i));
     }
-        
+    
     return retval;
 }
 
@@ -398,23 +413,34 @@ static int post_session(const signal_protocol_address *address, uint8_t *record,
 
 static int session_exists(const signal_protocol_address *address, void *user_data)
 {
-    VALUE result = rb_funcall((VALUE)user_data, rb_intern("session_exists?"), 0);
+    VALUE result = rb_funcall((VALUE)user_data, rb_intern("session_exists?"), 
+        2, 
+        rb_str_new((char *)address->name, address->name_len), 
+        INT2NUM(address->device_id)
+    );
     
     return (result == Qtrue) ? 0 : -1;
 }
 
 static int delete_session(const signal_protocol_address *address, void *user_data)
 {
-    VALUE result = rb_funcall((VALUE)user_data, rb_intern("delete_session"), 0);
+    (void)rb_funcall((VALUE)user_data, rb_intern("delete_session"), 
+        2,
+        rb_str_new((char *)address->name, address->name_len), 
+        INT2NUM(address->device_id)        
+    );
     
-    return (result == Qtrue) ? 0 : -1;
+    return 0;
 }
 
 static int delete_all_sessions(const char *name, size_t name_len, void *user_data)
 {
-    VALUE result = rb_funcall((VALUE)user_data, rb_intern("delete_all_sessions"), 0);
+    (void)rb_funcall((VALUE)user_data, rb_intern("delete_all_sessions"), 
+        1, 
+        rb_str_new((char *)name, name_len)
+    );
     
-    return (result == Qtrue) ? 0 : -1;    
+    return 0;
 }
 
 /* generic destroy function *******************************************/
@@ -425,7 +451,7 @@ static void destroy_func(void *user_data)
 
 /* methods ************************************************************/
 
-static VALUE initialize(VALUE self)
+static VALUE initialize(VALUE self, VALUE data)
 {
     struct ext_client *this;    
     Data_Get_Struct(self, struct ext_client, this);
@@ -446,6 +472,7 @@ static VALUE initialize(VALUE self)
     };
 
     rb_iv_set(self, "@refs", rb_ary_new());
+    rb_iv_set(self, "@data", data);
     rb_iv_set(self, "@global_lock", rb_funcall(rb_eval_string("Monitor"), rb_intern("new"), 0));
     
     if(signal_context_create(&this->ctx, (void *)self) != 0){
@@ -560,15 +587,17 @@ static VALUE generate_identity_key_pair(VALUE self)
         rb_bug("signal_protocol_key_helper_generate_identity_key_pair()");
     }
     
-    if(ratchet_identity_key_pair_serialize(&buffer, identity_key_pair) != 0){        
-        
-        rb_bug("ratchet_identity_key_pair_serialize()");
-    }
+    retval = rb_eval_string("KeyPair.new");
     
-    retval = buffer_to_rstring(buffer);    
+    ec_public_key_serialize(&buffer, ratchet_identity_key_pair_get_public(identity_key_pair));
+    rb_funcall(retval, rb_intern("pub="), 1, buffer_to_rstring(buffer));
+    signal_buffer_free(buffer);
+    
+    ec_private_key_serialize(&buffer, ratchet_identity_key_pair_get_private(identity_key_pair));
+    rb_funcall(retval, rb_intern("priv="), 1, buffer_to_rstring(buffer));
+    signal_buffer_free(buffer);
     
     ratchet_identity_key_pair_destroy((signal_type_base *)identity_key_pair);
-    signal_buffer_free(buffer);
     
     return retval;
 }
@@ -588,7 +617,7 @@ static VALUE generate_registration_id(VALUE self, VALUE extended)
     return UINT2NUM(id);
 }
 
-static VALUE generate_pre_keys(VALUE self, VALUE start_id, VALUE number)
+static VALUE generate_pre_keys(VALUE self, VALUE start_id, VALUE number_of_keys)
 {
     VALUE retval;
     struct ext_client *this;            
@@ -598,7 +627,7 @@ static VALUE generate_pre_keys(VALUE self, VALUE start_id, VALUE number)
     
     Data_Get_Struct(self, struct ext_client, this);
     
-    if(signal_protocol_key_helper_generate_pre_keys(&head, NUM2UINT(start_id), NUM2UINT(number), this->ctx) != 0){
+    if(signal_protocol_key_helper_generate_pre_keys(&head, NUM2UINT(start_id), NUM2UINT(number_of_keys), this->ctx) != 0){
         
         rb_bug("signal_protocol_key_helper_generate_pre_keys()");
     }
@@ -630,8 +659,6 @@ static VALUE generate_pre_keys(VALUE self, VALUE start_id, VALUE number)
     return retval;
 }
 
-
-
 static VALUE generate_signed_pre_key(VALUE self, VALUE identity_key_pair, VALUE signed_pre_key_id)
 {
     VALUE retval;
@@ -641,10 +668,13 @@ static VALUE generate_signed_pre_key(VALUE self, VALUE identity_key_pair, VALUE 
     signal_buffer *buffer;
     
     Data_Get_Struct(self, struct ext_client, this);
-    
-    if(ratchet_identity_key_pair_deserialize(&ratchet, (uint8_t *)RSTRING_PTR(identity_key_pair), RSTRING_LEN(identity_key_pair), this->ctx) != 0){
-     
-        rb_bug("ratchet_identity_key_pair_deserialize()");
+
+    if(ratchet_identity_key_pair_create(&ratchet, 
+        rstring_to_ec_public_key(this->ctx, rb_funcall(identity_key_pair, rb_intern("pub"), 0)),
+        rstring_to_ec_private_key(this->ctx, rb_funcall(identity_key_pair, rb_intern("priv"), 0))
+    ) != 0){
+        
+        rb_bug("ratchet_identity_key_pair_create");
     }
     
     if(signal_protocol_key_helper_generate_signed_pre_key(&pre_key, ratchet, NUM2UINT(signed_pre_key_id), my_get_time(), this->ctx) != 0){ 
@@ -666,6 +696,144 @@ static VALUE generate_signed_pre_key(VALUE self, VALUE identity_key_pair, VALUE 
     return retval;    
 }
 
+#if 0
+static VALUE sign(VALUE self, VALUE private_key, VALUE data)
+{
+    struct ext_client *this;                
+    signal_buffer *signature;
+    ec_private_key *k;
+    VALUE retval;
+    
+    Data_Get_Struct(self, struct ext_client, this);
+    
+    k = rstring_to_ec_private_key(private_key);
+    
+    curve_calculate_signature(this->ctx, 
+        &signature,
+        k,
+        (uint8_t *)RSTRING_PTR(data), RSTRING_LEN(data)
+    );
+    
+    retval = buffer_to_rstring(signature);
+    
+    ec_private_key_destroy((signal_base_type *)k);
+    signal_buffer_free(signature);
+    
+    return retval;    
+}
+#endif
+
+#if 0
+static VALUE create_registration_bundle(VALUE self, 
+    VALUE registration_id, 
+    VALUE device_id,
+    VALUE identity_key_pub,
+    VALUE signed_pre_key,
+)
+{
+    struct ext_client *this;                
+    session_signed_pre_key *spk;
+    
+    Data_Get_Struct(self, struct ext_client, this);
+    
+    if(session_signed_pre_key_deserialize(&spk, RSTRING_PTR(signed_pre_key), RSTRING_LEN(signed_pre_key), this->ctx) != 0){
+        
+        rb_bug("session_signed_pre_key_deserialize");
+    }
+    
+    UINT2NUM(registration_id)
+    
+    INT
+    
+    // signed_pre_key_id
+    UINT2NUM(session_signed_pre_key_get_id(spk))
+    
+    // signature
+    rb_str_new((char *)session_signed_pre_key_get_signature(spk), session_signed_pre_key_get_signature_len(spk));
+    
+    // signed_pre_key_pub
+    if(ec_public_key_serialize(&buffer, ec_key_pair_get_public(session_signed_pre_key_get_key_pair(spk))) != 0){
+        
+        rb_bug("ec_public_key_serialize()");
+    }
+    
+    
+    
+    
+    session_signed_pre_key
+    session_signed_pre_key
+    
+}
+#endif
+
+static VALUE add_session(VALUE self, VALUE remote_bundle)
+{
+    struct ext_client *this;            
+    session_pre_key_bundle *bundle;
+    session_builder *builder;
+    
+    Data_Get_Struct(self, struct ext_client, this);
+
+    if(session_pre_key_bundle_create(&bundle,
+        NUM2UINT(rb_funcall(remote_bundle, rb_intern("registration_id"), 0)),
+        NUM2INT(rb_funcall(remote_bundle, rb_intern("device_id"), 0)),
+        NUM2UINT(rb_funcall(remote_bundle, rb_intern("pre_key_id"), 0)),
+        rstring_to_ec_public_key(this->ctx, rb_funcall(remote_bundle, rb_intern("pre_key_pub"), 0)),
+        NUM2UINT(rb_funcall(remote_bundle, rb_intern("signed_pre_key_id"), 0)),
+        rstring_to_ec_public_key(this->ctx, rb_funcall(remote_bundle, rb_intern("signed_pre_key_pub"), 0)),
+        (uint8_t *)RSTRING_PTR(rb_funcall(remote_bundle, rb_intern("signed_pre_key_sig"), 0)),
+        RSTRING_LEN(rb_funcall(remote_bundle, rb_intern("signed_pre_key_sig"), 0)),
+        rstring_to_ec_public_key(this->ctx, rb_funcall(remote_bundle, rb_intern("identity_key_pub"), 0))
+    ) != 0){
+        rb_bug("session_pre_key_bundle_create");
+    }
+    
+    signal_protocol_address address = {
+        .name = RSTRING_PTR(rb_funcall(remote_bundle, rb_intern("name"), 0)), 
+        .name_len = RSTRING_LEN(rb_funcall(remote_bundle, rb_intern("name"), 0)), 
+        .device_id = NUM2UINT(rb_funcall(remote_bundle, rb_intern("device_id"), 0))
+    };
+    
+    if(session_builder_create(&builder, this->store_ctx, &address, this->ctx) != 0){
+        
+        rb_bug("session_builder_create");
+    }
+
+    if(session_builder_process_pre_key_bundle(builder, bundle) != 0){
+        
+        rb_bug("session_builder_process_pre_key_bundle");
+    }
+    
+    session_builder_free(builder);
+    session_pre_key_bundle_destroy((signal_type_base *)bundle);
+    
+    return Qnil;
+}
+
+VALUE encode(VALUE self, VALUE address, VALUE message)
+{
+    struct ext_client *this;            
+    session_cipher *cipher;
+    ciphertext_message *encrypted_message;
+    VALUE retval;
+    
+    Data_Get_Struct(self, struct ext_client, this);
+
+    signal_protocol_address addr = {
+        .name = RSTRING_PTR(rb_funcall(address, rb_intern("name"), 0)), 
+        .name_len = RSTRING_LEN(rb_funcall(address, rb_intern("name"), 0)), 
+        .device_id = NUM2UINT(rb_funcall(address, rb_intern("device_id"), 0))
+    };
+
+    session_cipher_create(&cipher, this->store_ctx, &addr, this->ctx);
+
+    session_cipher_encrypt(cipher, (uint8_t *)RSTRING_PTR(message), RSTRING_LEN(message), &encrypted_message);
+
+    retval = buffer_to_rstring(ciphertext_message_get_serialized(encrypted_message));
+
+    return retval;
+}
+
 /* other **************************************************************/
 
 static uint64_t my_get_time(void)
@@ -682,9 +850,36 @@ static uint64_t my_get_time(void)
     return retval;
 }
 
+static void free_state(void *p)
+{
+    struct ext_client *this = (struct ext_client *)p;
+    
+    if(this->store_ctx != NULL){
+        
+        signal_protocol_store_context_destroy(this->store_ctx);
+    }
+    
+    if(this->ctx != NULL){
+        
+        signal_context_destroy(this->ctx);
+    }
+    
+    free(p);
+}
+
 static VALUE alloc_state(VALUE klass)
 {
-    return Data_Wrap_Struct(klass, 0, free, calloc(1, sizeof(struct ext_client)));
+    return Data_Wrap_Struct(klass, 0, free_state, calloc(1, sizeof(struct ext_client)));
+}
+
+static VALUE copy_state(VALUE copy, VALUE orig) 
+{
+    if((TYPE(orig) != T_DATA) || (RDATA(orig)->dfree != (RUBY_DATA_FUNC)free_state)){
+        
+        rb_raise(rb_eTypeError, "wrong argument type");
+    }
+    
+    return initialize(copy, rb_funcall(orig, rb_intern("data"), 0));
 }
 
 static VALUE buffer_to_rstring(const signal_buffer *buffer)
@@ -695,6 +890,30 @@ static VALUE buffer_to_rstring(const signal_buffer *buffer)
 static signal_buffer *rstring_to_buffer(VALUE str)
 {
     return signal_buffer_create((uint8_t *)RSTRING_PTR(str), (size_t)RSTRING_LEN(str));
+}
+
+static ec_public_key *rstring_to_ec_public_key(signal_context *ctx, VALUE str)
+{
+    ec_public_key *retval;
+    
+    if(curve_decode_point(&retval, (uint8_t *)RSTRING_PTR(str), RSTRING_LEN(str), ctx) != 0){
+        
+        rb_bug("curve_decode_point");
+    } 
+    
+    return retval; 
+}
+
+static ec_private_key *rstring_to_ec_private_key(signal_context *ctx, VALUE str)
+{
+    ec_private_key *retval;
+    
+    if(curve_decode_private_point(&retval, (uint8_t *)RSTRING_PTR(str), RSTRING_LEN(str), ctx) != 0){
+        
+        rb_bug("curve_decode_private_point");
+    } 
+    
+    return retval; 
 }
 
 void Init_ext_lib_signal(void)
@@ -710,10 +929,14 @@ void Init_ext_lib_signal(void)
     
     rb_define_alloc_func(cExtClient, alloc_state);
     
-    rb_define_method(cExtClient, "initialize", initialize, 0);
+    rb_define_method(cExtClient, "initialize", initialize, 1);
+    rb_define_method(cExtClient, "initialize_copy", copy_state, 1);
     
     rb_define_method(cExtClient, "generate_identity_key_pair", generate_identity_key_pair, 0);
     rb_define_method(cExtClient, "generate_registration_id", generate_registration_id, 1);
     rb_define_method(cExtClient, "generate_pre_keys", generate_pre_keys, 2);
     rb_define_method(cExtClient, "generate_signed_pre_key", generate_signed_pre_key, 2);        
+ 
+    rb_define_method(cExtClient, "add_session", add_session, 1);        
+    rb_define_method(cExtClient, "encode", encode, 2);        
 }
