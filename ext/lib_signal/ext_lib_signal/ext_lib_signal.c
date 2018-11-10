@@ -19,6 +19,23 @@ static VALUE buffer_to_rstring(const signal_buffer *buffer);
 static signal_buffer *rstring_to_buffer(VALUE str);
 static ec_public_key *rstring_to_ec_public_key(signal_context *ctx, VALUE str);
 static ec_private_key *rstring_to_ec_private_key(signal_context *ctx, VALUE str);
+static void handle_error(int error);
+
+static VALUE eErrUnknown;
+static VALUE eErrDuplicateMessage;
+static VALUE eErrInvalidKey;
+static VALUE eErrInvalidKeyID;
+static VALUE eErrInvalidMessage;
+static VALUE eErrInvalidMAC;
+static VALUE eErrInvalidVersion;
+static VALUE eErrLegacyMessage;
+static VALUE eErrNoSession;
+static VALUE eErrStaleKeyExchange;
+static VALUE eErrUntrustedIdentity;
+static VALUE eErrVRFSigVerifFailed;
+static VALUE eErrInvalidProtoBuf;
+static VALUE eErrFPVersionMismatch;
+static VALUE eErrFPIdentMismatch;
 
 /* crypto provider ****************************************************/
 
@@ -810,6 +827,12 @@ static VALUE add_session(VALUE self, VALUE remote_bundle)
     return Qnil;
 }
 
+/* @param address [LibSignal::Address]
+/* @param message [String]
+ * 
+ * @return [String]
+ * 
+ * */
 VALUE encode(VALUE self, VALUE address, VALUE message)
 {
     struct ext_client *this;            
@@ -916,6 +939,63 @@ static ec_private_key *rstring_to_ec_private_key(signal_context *ctx, VALUE str)
     return retval; 
 }
 
+static void handle_error(int error)
+{
+    VALUE ex;
+    
+    switch(error){
+    default:
+    case SG_ERR_UNKNOWN:      
+        ex = eErrUnknown;
+        break;
+    case SG_ERR_DUPLICATE_MESSAGE:
+        ex = eErrDuplicateMessage;    
+        break;
+    case SG_ERR_INVALID_KEY:
+        ex = eErrInvalidKey;
+        break;
+    case SG_ERR_INVALID_KEY_ID:
+        ex = eErrInvalidKeyID;
+        break;
+    case SG_ERR_INVALID_MAC:
+        ex = eErrInvalidMAC;
+        break;
+    case SG_ERR_INVALID_MESSAGE:
+        ex = eErrInvalidMessage;
+        break;
+    case SG_ERR_INVALID_VERSION:
+        ex = eErrInvalidVersion;
+        break;
+    case SG_ERR_LEGACY_MESSAGE:
+        ex = eErrLegacyMessage;
+        break;
+    case SG_ERR_NO_SESSION:
+        ex = eErrNoSession;
+        break;
+    case SG_ERR_STALE_KEY_EXCHANGE:
+        ex = eErrStaleKeyExchange;
+        break;
+    case SG_ERR_UNTRUSTED_IDENTITY:
+        ex = eErrUntrustedIdentity;
+        break;
+    case SG_ERR_VRF_SIG_VERIF_FAILED:
+        ex = eErrVRFSigVerifFailed;
+        break;
+    case SG_ERR_INVALID_PROTO_BUF:
+        ex = eErrInvalidProtoBuf;
+        break;
+    case SG_ERR_FP_VERSION_MISMATCH:
+        ex = eErrFPIdentMismatch;
+        break;
+    case SG_ERR_FP_IDENT_MISMATCH:
+        ex = eErrFPIdentMismatch;
+        break;
+    }
+    
+    rb_raise(ex, "error code %i", error);
+}
+
+
 void Init_ext_lib_signal(void)
 {
     VALUE cLibSignal;
@@ -939,4 +1019,22 @@ void Init_ext_lib_signal(void)
  
     rb_define_method(cExtClient, "add_session", add_session, 1);        
     rb_define_method(cExtClient, "encode", encode, 2);        
+    
+    
+    eErrUnknown = rb_define_class_under(cLibSignal, "ErrUnknown", rb_eStandardError);
+    eErrDuplicateMessage = rb_define_class_under(cLibSignal, "ErrDuplicateMessage", rb_eStandardError);
+    eErrInvalidKey = rb_define_class_under(cLibSignal, "ErrInvalidKey", rb_eStandardError);
+    eErrInvalidKeyID = rb_define_class_under(cLibSignal, "ErrInvalidKeyID", rb_eStandardError);
+    eErrInvalidMAC = rb_define_class_under(cLibSignal, "ErrInvalidMac", rb_eStandardError);
+    eErrInvalidMessage = rb_define_class_under(cLibSignal, "ErrInvalidMessage", rb_eStandardError);
+    eErrInvalidVersion = rb_define_class_under(cLibSignal, "ErrInvalidVersion", rb_eStandardError);
+    eErrLegacyMessage = rb_define_class_under(cLibSignal, "ErrLegacyMessage", rb_eStandardError);
+    eErrNoSession = rb_define_class_under(cLibSignal, "ErrNoSession", rb_eStandardError);
+    eErrStaleKeyExchange = rb_define_class_under(cLibSignal, "ErrStaleKeyExchange", rb_eStandardError);
+    eErrUntrustedIdentity = rb_define_class_under(cLibSignal, "ErrUntrustedIdentity", rb_eStandardError);
+    eErrVRFSigVerifFailed = rb_define_class_under(cLibSignal, "ErrVRFSigVerifFailed", rb_eStandardError);
+    eErrInvalidProtoBuf = rb_define_class_under(cLibSignal, "ErrInvalidProtoBuf", rb_eStandardError);
+    eErrFPVersionMismatch = rb_define_class_under(cLibSignal, "ErrFPVersionMismatch", rb_eStandardError);
+    eErrFPIdentMismatch = rb_define_class_under(cLibSignal, "ErrFPIdentMismatch", rb_eStandardError);
 }
+
