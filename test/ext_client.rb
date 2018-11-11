@@ -13,26 +13,30 @@ class TestExtClient < Minitest::Test
     
     result = @client.generate_identity_key_pair
     
-    assert_kind_of Struct, result
+    assert_kind_of KeyPair, result
     assert_kind_of String, result.pub
     assert_kind_of String, result.priv
     
   end
 
   def test_generate_registration_id
-    assert_kind_of Integer, @client.generate_registration_id(false)
-  end
-  
-  def test_generate_registration_id_extended
-    assert_kind_of Integer, @client.generate_registration_id(true)
+    
+    result = @client.generate_registration_id
+    
+    assert_kind_of Integer, result
+    assert (0 .. (2**32-1)).include? result
+    
   end
   
   def test_generate_pre_keys
   
-    keys = @client.generate_pre_keys(0,10)
+    start_id = rand(0..(2**16-1))
+    number = rand(0..100)
+  
+    keys = @client.generate_pre_keys(start_id,number)
     
     assert_kind_of Array, keys
-    assert_equal 10, keys.size
+    assert_equal number, keys.size
   
   end
   
@@ -46,7 +50,7 @@ class TestExtClient < Minitest::Test
   end
   
   def test_generate_signed_pre_key
-    assert_kind_of String, @client.generate_signed_pre_key( @client.generate_identity_key_pair, 0 )
+    @client.generate_signed_pre_key( @client.generate_identity_key_pair, 0 )
   end
   
   def test_clone

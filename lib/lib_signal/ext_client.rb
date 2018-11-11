@@ -8,6 +8,11 @@ module LibSignal
       puts "#{level}: #{msg}"
     end
     
+    # @return [Address]
+    def address
+      @data.address
+    end
+    
   end
 
 end

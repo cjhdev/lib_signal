@@ -2,11 +2,18 @@ module LibSignal
 
   class Client
     
-    def initialize(name, **opts)
+    # params: 
+    #   :data inject persistence
+    #   :max_pre_keys
+    #
+    #
+    #
+    def initialize(address, **opts)
       
-      @data = opts[:data]||MemoryBacked.new(name)
+      @data = opts[:data]||MemoryBacked.new(address)
       @ext = ExtClient.new(@data)
       
+      # if this device is new we need to install some starting values
       if not @data.installed?
         
         @data.install(
@@ -19,52 +26,13 @@ module LibSignal
       end
       
     end
-    
-    def name
-      @data.name
+
+    # provides a single pre_key
+    def peer_bundle
     end
     
-    # @return [Integer]
-    def registration_id
-      @data.get_registration_id
-    end
-    
-    # Add or update a remote client
-    #
-    def add_session(name, id, pre_key)
-      
-    end
-    
-    # List remotes
-    #
-    # @return [Array]
-    def remotes
-    end
-    
-    def remove_remote
-    end
-    
-    # Encode a message for named recipient
-    #
-    # @param client_name [String]
-    # @param msg [String] plaintext to encode
-    #
-    # @return [String] encoded message
-    #
-    # @raises [NoSessionError] no session for this client
-    #
-    def encode(client_name, msg)
-    end
-    
-    # Decode a message from named recipient
-    #
-    # @param client_name [String]
-    # @param msg [String] encoded message
-    #
-    # @return [String] plaintext
-    #
-    # @raises [DecodeError]
-    def decode(client_name, msg)
+    # provides a set of pre_keys
+    def registration_bundle
     end
     
   end

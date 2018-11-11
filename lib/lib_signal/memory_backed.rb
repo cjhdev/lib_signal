@@ -2,10 +2,10 @@ module LibSignal
 
   class MemoryBacked < Persistence
     
-    attr_reader :name
+    attr_reader :address
     
-    def initialize(name)
-      @name = name
+    def initialize(address)
+      @address = address
       @identity_key = nil
       @registration_id = nil     
       @sessions = {}      
@@ -14,12 +14,20 @@ module LibSignal
       @sender_keys = {}
     end
     
+    def name
+      @address.name
+    end
+    
+    def device_id
+      @address.device_id
+    end
+    
     def install(params)
       if not installed?
         @identity_key = params[:identity_key]
-        @registration_id = params[:registration_id]
-        @pre_keys = params[:pre_keys]
+        @registration_id = params[:registration_id]        
         @signed_pre_keys = params[:signed_pre_key]
+        @pre_keys = params[:pre_keys]
       end    
     end
     

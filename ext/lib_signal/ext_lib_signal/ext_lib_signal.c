@@ -473,6 +473,23 @@ static VALUE initialize(VALUE self, VALUE data)
     struct ext_client *this;    
     Data_Get_Struct(self, struct ext_client, this);
     
+    if(rb_obj_is_kind_of(data, rb_eval_string("Persistence")) != Qtrue){        
+    
+        rb_raise(rb_eTypeError, "data must be a Persistence subclass");
+    }
+    
+    /* this keeps references to objects created by the extension 
+     * so the GC doesn't collect them */
+    rb_iv_set(self, "@refs", rb_ary_new());
+    
+    rb_iv_set(self, "@global_lock", rb_funcall(rb_eval_string("Monitor"), rb_intern("new"), 0));
+    rb_iv_set(self, "@data", data);
+    
+    if(signal_context_create(&this->ctx, (void *)self) != 0){
+        
+        rb_bug("signal_context_create()");
+    }
+
     const struct signal_crypto_provider crypto_provider = {
         .random_func = random_func,
         .hmac_sha256_init_func = hmac_sha256_init_func,
@@ -487,15 +504,6 @@ static VALUE initialize(VALUE self, VALUE data)
         .decrypt_func = aes_decrypt,
         .user_data = (void *)self
     };
-
-    rb_iv_set(self, "@refs", rb_ary_new());
-    rb_iv_set(self, "@data", data);
-    rb_iv_set(self, "@global_lock", rb_funcall(rb_eval_string("Monitor"), rb_intern("new"), 0));
-    
-    if(signal_context_create(&this->ctx, (void *)self) != 0){
-        
-        rb_bug("signal_context_create()");
-    }
 
     if(signal_context_set_crypto_provider(this->ctx, &crypto_provider) != 0){
         
@@ -592,43 +600,57 @@ static VALUE initialize(VALUE self, VALUE data)
 
 static VALUE generate_identity_key_pair(VALUE self)
 {
-    VALUE retval;
+    VALUE retval, args;
     struct ext_client *this;        
     ratchet_identity_key_pair *identity_key_pair;    
-    signal_buffer *buffer;
+    signal_buffer *pub_buf, *priv_buf;
+    int err;
     
     Data_Get_Struct(self, struct ext_client, this);
     
-    if(signal_protocol_key_helper_generate_identity_key_pair(&identity_key_pair, this->ctx) != 0){
+    if((err = signal_protocol_key_helper_generate_identity_key_pair(&identity_key_pair, this->ctx)) != 0){
         
-        rb_bug("signal_protocol_key_helper_generate_identity_key_pair()");
+        handle_error(err);        
     }
     
-    retval = rb_eval_string("KeyPair.new");
+    if((err = ec_public_key_serialize(&pub_buf, ratchet_identity_key_pair_get_public(identity_key_pair))) != 0){
+        
+        ratchet_identity_key_pair_destroy((signal_type_base *)identity_key_pair);
+        handle_error(err);        
+    }
     
-    ec_public_key_serialize(&buffer, ratchet_identity_key_pair_get_public(identity_key_pair));
-    rb_funcall(retval, rb_intern("pub="), 1, buffer_to_rstring(buffer));
-    signal_buffer_free(buffer);
-    
-    ec_private_key_serialize(&buffer, ratchet_identity_key_pair_get_private(identity_key_pair));
-    rb_funcall(retval, rb_intern("priv="), 1, buffer_to_rstring(buffer));
-    signal_buffer_free(buffer);
+    if((err = ec_private_key_serialize(&priv_buf, ratchet_identity_key_pair_get_private(identity_key_pair))) != 0){
+        
+        ratchet_identity_key_pair_destroy((signal_type_base *)identity_key_pair);
+        handle_error(err);        
+    }
     
     ratchet_identity_key_pair_destroy((signal_type_base *)identity_key_pair);
+    
+    /* will memory leak pub_buf and priv_buf if malloc fails */
+    args = rb_hash_new();    
+    rb_hash_aset(args, ID2SYM(rb_intern("pub")), buffer_to_rstring(pub_buf));
+    rb_hash_aset(args, ID2SYM(rb_intern("priv")), buffer_to_rstring(priv_buf));
+    
+    retval = rb_funcall(rb_eval_string("KeyPair"), rb_intern("new"), 1, args); 
+    
+    signal_buffer_free(pub_buf);
+    signal_buffer_free(priv_buf);
     
     return retval;
 }
 
-static VALUE generate_registration_id(VALUE self, VALUE extended)
+static VALUE generate_registration_id(VALUE self)
 {
     struct ext_client *this;            
     uint32_t id;
+    int err;
     
     Data_Get_Struct(self, struct ext_client, this);
     
-    if(signal_protocol_key_helper_generate_registration_id(&id, (extended == Qtrue) ? 1 : 0, this->ctx) != 0){
+    if((err = signal_protocol_key_helper_generate_registration_id(&id, 1, this->ctx)) != 0){
         
-        rb_bug("signal_protocol_key_helper_generate_registration_id()");
+        handle_error(err);
     }
     
     return UINT2NUM(id);
@@ -641,12 +663,37 @@ static VALUE generate_pre_keys(VALUE self, VALUE start_id, VALUE number_of_keys)
     signal_protocol_key_helper_pre_key_list_node *head, *node;
     session_pre_key *pre_key;
     signal_buffer *buffer;
+    int err;
     
     Data_Get_Struct(self, struct ext_client, this);
     
-    if(signal_protocol_key_helper_generate_pre_keys(&head, NUM2UINT(start_id), NUM2UINT(number_of_keys), this->ctx) != 0){
+    if(rb_obj_is_kind_of(start_id, rb_cInteger) != Qtrue){
         
-        rb_bug("signal_protocol_key_helper_generate_pre_keys()");
+        rb_raise(rb_eTypeError, "start_id must be an integer");
+    }
+    else{
+    
+        if((NUM2LL(start_id) < 0) || (NUM2LL(start_id) > UINT16_MAX)){
+            
+            rb_raise(rb_eRangeError, "start_id must be in range 0..65535");
+        }        
+    }
+    
+    if(rb_obj_is_kind_of(number_of_keys, rb_cInteger) != Qtrue){
+        
+        rb_raise(rb_eTypeError, "number_of_keys must be an integer");
+    }
+    else{
+    
+        if((NUM2LL(number_of_keys) < 0) || (NUM2LL(number_of_keys) > UINT16_MAX)){
+            
+            rb_raise(rb_eRangeError, "number_of_keys must be in range 0..65535");
+        }        
+    }
+    
+    if((err = signal_protocol_key_helper_generate_pre_keys(&head, NUM2UINT(start_id), NUM2UINT(number_of_keys), this->ctx)) != 0){
+        
+        handle_error(err);
     }
     
     retval = rb_ary_new();
@@ -659,9 +706,10 @@ static VALUE generate_pre_keys(VALUE self, VALUE start_id, VALUE number_of_keys)
         
         assert(pre_key != NULL);
         
-        if(session_pre_key_serialize(&buffer, pre_key) != 0){
-            
-            rb_bug("session_pre_key_serialize()");
+        if((err = session_pre_key_serialize(&buffer, pre_key)) != 0){
+        
+            signal_protocol_key_helper_key_list_free(head);
+            handle_error(err);
         }
         
         rb_ary_push(retval, buffer_to_rstring(buffer));
@@ -676,6 +724,11 @@ static VALUE generate_pre_keys(VALUE self, VALUE start_id, VALUE number_of_keys)
     return retval;
 }
 
+/* @param identity_key_pair [KeyPair]
+ * @param signed_pre_key_id [Integer] (0..4294967295)
+ * @return [String]
+ * 
+ * */
 static VALUE generate_signed_pre_key(VALUE self, VALUE identity_key_pair, VALUE signed_pre_key_id)
 {
     VALUE retval;
@@ -683,115 +736,81 @@ static VALUE generate_signed_pre_key(VALUE self, VALUE identity_key_pair, VALUE 
     session_signed_pre_key *pre_key;
     ratchet_identity_key_pair *ratchet;
     signal_buffer *buffer;
+    int err;
     
     Data_Get_Struct(self, struct ext_client, this);
 
-    if(ratchet_identity_key_pair_create(&ratchet, 
+    if(rb_obj_is_instance_of(identity_key_pair, rb_eval_string("KeyPair")) != Qtrue){
+        
+        rb_raise(rb_eTypeError, "identity_key_pair must be an instance of KeyPair");
+    }
+    
+    if(rb_obj_is_kind_of(signed_pre_key_id, rb_cInteger) != Qtrue){
+        
+        rb_raise(rb_eTypeError, "signed_pre_key_id must be an integer");
+    }
+    else{
+    
+        if((NUM2LL(signed_pre_key_id) < 0) || (NUM2LL(signed_pre_key_id) > UINT32_MAX)){
+            
+            rb_raise(rb_eRangeError, "signed_pre_key_id must be in range 0..4294967295");
+        }        
+    }
+     
+    if((err = ratchet_identity_key_pair_create(&ratchet, 
         rstring_to_ec_public_key(this->ctx, rb_funcall(identity_key_pair, rb_intern("pub"), 0)),
         rstring_to_ec_private_key(this->ctx, rb_funcall(identity_key_pair, rb_intern("priv"), 0))
-    ) != 0){
+    )) != 0){
         
-        rb_bug("ratchet_identity_key_pair_create");
+        handle_error(err);
     }
     
-    if(signal_protocol_key_helper_generate_signed_pre_key(&pre_key, ratchet, NUM2UINT(signed_pre_key_id), my_get_time(), this->ctx) != 0){ 
+    if((err = signal_protocol_key_helper_generate_signed_pre_key(&pre_key, ratchet, NUM2UINT(signed_pre_key_id), my_get_time(), this->ctx)) != 0){ 
        
-        rb_bug("signal_protocol_key_helper_generate_signed_pre_key()");
+        ratchet_identity_key_pair_destroy((signal_type_base *)ratchet);
+        handle_error(err);
     }
-    
-    if(session_signed_pre_key_serialize(&buffer, pre_key) != 0){
-        
-        rb_bug("session_signed_pre_key_serialize()");
-    }
-    
-    retval = buffer_to_rstring(buffer);
     
     ratchet_identity_key_pair_destroy((signal_type_base *)ratchet);
+    
+    if((err = session_signed_pre_key_serialize(&buffer, pre_key)) != 0){
+    
+        session_pre_key_destroy((signal_type_base *)pre_key);
+        handle_error(err);
+    }
+    
     session_pre_key_destroy((signal_type_base *)pre_key);
+    
+    // if malloc fails this will memory leak 'buffer'
+    retval = buffer_to_rstring(buffer);
+    
     signal_buffer_free(buffer);
     
     return retval;    
 }
 
-#if 0
-static VALUE sign(VALUE self, VALUE private_key, VALUE data)
-{
-    struct ext_client *this;                
-    signal_buffer *signature;
-    ec_private_key *k;
-    VALUE retval;
-    
-    Data_Get_Struct(self, struct ext_client, this);
-    
-    k = rstring_to_ec_private_key(private_key);
-    
-    curve_calculate_signature(this->ctx, 
-        &signature,
-        k,
-        (uint8_t *)RSTRING_PTR(data), RSTRING_LEN(data)
-    );
-    
-    retval = buffer_to_rstring(signature);
-    
-    ec_private_key_destroy((signal_base_type *)k);
-    signal_buffer_free(signature);
-    
-    return retval;    
-}
-#endif
-
-#if 0
-static VALUE create_registration_bundle(VALUE self, 
-    VALUE registration_id, 
-    VALUE device_id,
-    VALUE identity_key_pub,
-    VALUE signed_pre_key,
-)
-{
-    struct ext_client *this;                
-    session_signed_pre_key *spk;
-    
-    Data_Get_Struct(self, struct ext_client, this);
-    
-    if(session_signed_pre_key_deserialize(&spk, RSTRING_PTR(signed_pre_key), RSTRING_LEN(signed_pre_key), this->ctx) != 0){
-        
-        rb_bug("session_signed_pre_key_deserialize");
-    }
-    
-    UINT2NUM(registration_id)
-    
-    INT
-    
-    // signed_pre_key_id
-    UINT2NUM(session_signed_pre_key_get_id(spk))
-    
-    // signature
-    rb_str_new((char *)session_signed_pre_key_get_signature(spk), session_signed_pre_key_get_signature_len(spk));
-    
-    // signed_pre_key_pub
-    if(ec_public_key_serialize(&buffer, ec_key_pair_get_public(session_signed_pre_key_get_key_pair(spk))) != 0){
-        
-        rb_bug("ec_public_key_serialize()");
-    }
-    
-    
-    
-    
-    session_signed_pre_key
-    session_signed_pre_key
-    
-}
-#endif
-
+/* Create a session with remote client
+ * 
+ * @param remote_bundle [PreKeyBundle]
+ * 
+ * @return [self]
+ * 
+ * */
 static VALUE add_session(VALUE self, VALUE remote_bundle)
 {
     struct ext_client *this;            
     session_pre_key_bundle *bundle;
     session_builder *builder;
+    int err;
     
     Data_Get_Struct(self, struct ext_client, this);
 
-    if(session_pre_key_bundle_create(&bundle,
+    if(rb_obj_is_instance_of(remote_bundle, rb_eval_string("PreKeyBundle")) != Qtrue){
+        
+        rb_raise(rb_eTypeError, "remote_bundle must be an instance of PreKeyBundle");
+    }
+
+    if((err = session_pre_key_bundle_create(&bundle,
         NUM2UINT(rb_funcall(remote_bundle, rb_intern("registration_id"), 0)),
         NUM2INT(rb_funcall(remote_bundle, rb_intern("device_id"), 0)),
         NUM2UINT(rb_funcall(remote_bundle, rb_intern("pre_key_id"), 0)),
@@ -801,8 +820,9 @@ static VALUE add_session(VALUE self, VALUE remote_bundle)
         (uint8_t *)RSTRING_PTR(rb_funcall(remote_bundle, rb_intern("signed_pre_key_sig"), 0)),
         RSTRING_LEN(rb_funcall(remote_bundle, rb_intern("signed_pre_key_sig"), 0)),
         rstring_to_ec_public_key(this->ctx, rb_funcall(remote_bundle, rb_intern("identity_key_pub"), 0))
-    ) != 0){
-        rb_bug("session_pre_key_bundle_create");
+    )) != 0){
+        
+        handle_error(err);
     }
     
     signal_protocol_address address = {
@@ -811,50 +831,36 @@ static VALUE add_session(VALUE self, VALUE remote_bundle)
         .device_id = NUM2UINT(rb_funcall(remote_bundle, rb_intern("device_id"), 0))
     };
     
-    if(session_builder_create(&builder, this->store_ctx, &address, this->ctx) != 0){
+    if((err = session_builder_create(&builder, this->store_ctx, &address, this->ctx)) != 0){
         
-        rb_bug("session_builder_create");
+        session_pre_key_bundle_destroy((signal_type_base *)bundle);
+        handle_error(err);
     }
 
-    if(session_builder_process_pre_key_bundle(builder, bundle) != 0){
+    if((err = session_builder_process_pre_key_bundle(builder, bundle)) != 0){
         
-        rb_bug("session_builder_process_pre_key_bundle");
+        session_pre_key_bundle_destroy((signal_type_base *)bundle);
+        session_builder_free(builder);
+        handle_error(err);
     }
-    
-    session_builder_free(builder);
+        
     session_pre_key_bundle_destroy((signal_type_base *)bundle);
+    session_builder_free(builder);
     
-    return Qnil;
+    return self;
 }
 
-/* @param address [LibSignal::Address]
-/* @param message [String]
+/* Encode a message
+ * 
+ * @param address [LibSignal::Address]
+ * @param message [String]
  * 
  * @return [String]
  * 
  * */
 VALUE encode(VALUE self, VALUE address, VALUE message)
 {
-    struct ext_client *this;            
-    session_cipher *cipher;
-    ciphertext_message *encrypted_message;
-    VALUE retval;
-    
-    Data_Get_Struct(self, struct ext_client, this);
-
-    signal_protocol_address addr = {
-        .name = RSTRING_PTR(rb_funcall(address, rb_intern("name"), 0)), 
-        .name_len = RSTRING_LEN(rb_funcall(address, rb_intern("name"), 0)), 
-        .device_id = NUM2UINT(rb_funcall(address, rb_intern("device_id"), 0))
-    };
-
-    session_cipher_create(&cipher, this->store_ctx, &addr, this->ctx);
-
-    session_cipher_encrypt(cipher, (uint8_t *)RSTRING_PTR(message), RSTRING_LEN(message), &encrypted_message);
-
-    retval = buffer_to_rstring(ciphertext_message_get_serialized(encrypted_message));
-
-    return retval;
+    return self;
 }
 
 /* other **************************************************************/
@@ -912,16 +918,26 @@ static VALUE buffer_to_rstring(const signal_buffer *buffer)
 
 static signal_buffer *rstring_to_buffer(VALUE str)
 {
-    return signal_buffer_create((uint8_t *)RSTRING_PTR(str), (size_t)RSTRING_LEN(str));
+    signal_buffer *retval;
+    
+    retval = signal_buffer_create((uint8_t *)RSTRING_PTR(str), (size_t)RSTRING_LEN(str));
+    
+    if(retval == NULL){
+        
+        rb_raise(rb_eNoMemError, "rstring_to_buffer()");
+    }
+    
+    return retval;
 }
 
 static ec_public_key *rstring_to_ec_public_key(signal_context *ctx, VALUE str)
 {
+    int err;
     ec_public_key *retval;
     
-    if(curve_decode_point(&retval, (uint8_t *)RSTRING_PTR(str), RSTRING_LEN(str), ctx) != 0){
+    if((err = curve_decode_point(&retval, (uint8_t *)RSTRING_PTR(str), RSTRING_LEN(str), ctx)) != 0){
         
-        rb_bug("curve_decode_point");
+        handle_error(err);
     } 
     
     return retval; 
@@ -930,10 +946,11 @@ static ec_public_key *rstring_to_ec_public_key(signal_context *ctx, VALUE str)
 static ec_private_key *rstring_to_ec_private_key(signal_context *ctx, VALUE str)
 {
     ec_private_key *retval;
+    int err;
     
-    if(curve_decode_private_point(&retval, (uint8_t *)RSTRING_PTR(str), RSTRING_LEN(str), ctx) != 0){
+    if((err = curve_decode_private_point(&retval, (uint8_t *)RSTRING_PTR(str), RSTRING_LEN(str), ctx)) != 0){
         
-        rb_bug("curve_decode_private_point");
+        handle_error(err);
     } 
     
     return retval; 
@@ -941,7 +958,7 @@ static ec_private_key *rstring_to_ec_private_key(signal_context *ctx, VALUE str)
 
 static void handle_error(int error)
 {
-    VALUE ex;
+    VALUE ex = Qnil;
     
     switch(error){
     default:
@@ -990,11 +1007,21 @@ static void handle_error(int error)
     case SG_ERR_FP_IDENT_MISMATCH:
         ex = eErrFPIdentMismatch;
         break;
+    case SG_ERR_NOMEM:
+        ex = rb_eNoMemError;
+        break;        
+    case SG_ERR_INVAL:
+        ex = rb_eArgError;
+        break;
+    case SG_SUCCESS:
+        break;
     }
     
-    rb_raise(ex, "error code %i", error);
+    if(ex != Qnil){
+    
+        rb_raise(ex, "error code %i", error);
+    }
 }
-
 
 void Init_ext_lib_signal(void)
 {
@@ -1013,7 +1040,7 @@ void Init_ext_lib_signal(void)
     rb_define_method(cExtClient, "initialize_copy", copy_state, 1);
     
     rb_define_method(cExtClient, "generate_identity_key_pair", generate_identity_key_pair, 0);
-    rb_define_method(cExtClient, "generate_registration_id", generate_registration_id, 1);
+    rb_define_method(cExtClient, "generate_registration_id", generate_registration_id, 0);
     rb_define_method(cExtClient, "generate_pre_keys", generate_pre_keys, 2);
     rb_define_method(cExtClient, "generate_signed_pre_key", generate_signed_pre_key, 2);        
  
