@@ -27,14 +27,6 @@ module LibSignal
       
     end
 
-    # provides a single pre_key
-    def peer_bundle
-    end
-    
-    # provides a set of pre_keys
-    def registration_bundle
-    end
-    
   end
   
 end

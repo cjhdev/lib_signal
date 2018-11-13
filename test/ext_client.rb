@@ -6,16 +6,17 @@ class TestExtClient < Minitest::Test
   include LibSignal
   
   def setup
-    @client = ExtClient.new(MemoryBacked.new("test"))
+    @client = ExtClient.new(MemoryBacked.new("test"))    
   end
   
   def test_generate_identity_key_pair
     
     result = @client.generate_identity_key_pair
     
-    assert_kind_of KeyPair, result
+    assert_kind_of IdentityKey, result
     assert_kind_of String, result.pub
     assert_kind_of String, result.priv
+    assert_kind_of String, result.record
     
   end
 
@@ -37,6 +38,10 @@ class TestExtClient < Minitest::Test
     
     assert_kind_of Array, keys
     assert_equal number, keys.size
+    
+    keys.each do |key|
+      assert_kind_of PreKey, key
+    end
   
   end
   
@@ -50,7 +55,17 @@ class TestExtClient < Minitest::Test
   end
   
   def test_generate_signed_pre_key
-    @client.generate_signed_pre_key( @client.generate_identity_key_pair, 0 )
+    
+    result = @client.generate_signed_pre_key( @client.generate_identity_key_pair, 0 )
+    
+    assert_kind_of SignedPreKey, result
+    
+    assert_kind_of Integer, result.id
+    assert_kind_of Integer, result.timestamp
+    assert_kind_of String, result.signature
+    assert_kind_of String, result.pub
+    assert_kind_of String, result.priv
+    
   end
   
   def test_clone
@@ -62,5 +77,9 @@ class TestExtClient < Minitest::Test
     copy = @client.clone
     assert @client != copy
   end
+  
+  def test_add_session
+  end
+
   
 end

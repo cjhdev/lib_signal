@@ -2,32 +2,44 @@ module LibSignal
 
   class Persistence
   
-    # load specific session
-    def get_session(name, id)
+    # @param name [String]
+    # @param device_id [Integer]
+    # @return [Hash]
+    def get_session(name, device_id)
       raise NotImplementedError
     end
     
-    # load all sessions
-    def get_all_sessions(name)
+    # @param name [String]
+    # @return [Array<Integer>] 
+    def get_session_devices(name)
       raise NotImplementedError
     end
     
-    # store a session
-    def put_session(name, id, record, user_record)
+    # @param name [String]
+    # @param device_id [Integer]
+    # @param record [String]
+    # @param user_record [String] optional
+    # @return [self]
+    def put_session(name, device_id, record, user_record=nil)
       raise NotImplementedError
     end
     
-    # does this session exist?
-    def session_exists?(name, id)
+    # @param name [String]
+    # @param device_id [Integer]
+    # @return [true,false]
+    def session_exists?(name, device_id)
       raise NotImplementedError
     end
     
-    # delete a session
-    def delete_session(name, id)
+    # @param name [String]
+    # @param device_id [Integer]
+    # @return [self]
+    def delete_session(name, device_id)
       raise NotImplementedError
     end
     
-    # delete all sessions
+    # @param name [String]
+    # @return [self]
     def delete_all_sessions(name)
       raise NotImplementedError
     end
@@ -40,7 +52,6 @@ module LibSignal
       raise NotImplementedError
     end
     
-    # @return [Hash]
     def get_self
       raise NotImplementedError
     end
